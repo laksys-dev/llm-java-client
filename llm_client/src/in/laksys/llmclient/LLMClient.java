@@ -1,56 +1,39 @@
 package in.laksys.llmclient;
 
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.FlowLayout;
-import java.awt.Font;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
-
-import javax.swing.BorderFactory;
-import javax.swing.JButton;
-import javax.swing.JComboBox;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
-import javax.swing.JTextField;
-import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
+import org.json.*;
 
 public class LLMClient extends JFrame {
     private JTextField queryField;
-    private JTextArea responseArea;
+    private JTextArea conversationArea;
     private JButton sendButton;
     private JButton clearButton;
     private JButton refreshButton;
+    private JButton newChatButton;
     private JComboBox<String> modelComboBox;
     private JLabel statusLabel;
     
     private static final String OLLAMA_API_BASE = "http://localhost:11434";
     private static final String OLLAMA_TAGS_URL = OLLAMA_API_BASE + "/api/tags";
-    private static final String OLLAMA_GENERATE_URL = OLLAMA_API_BASE + "/api/generate";
+    private static final String OLLAMA_CHAT_URL = OLLAMA_API_BASE + "/api/chat";
     
     private ArrayList<String> availableModels;
+    private ArrayList<JSONObject> conversationHistory;
 
     public LLMClient() {
         setTitle("Ollama Chat Interface");
-        setSize(750, 550);
+        setSize(750, 600);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         
         availableModels = new ArrayList<>();
+        conversationHistory = new ArrayList<>();
         initComponents();
         loadModels();
         setVisible(true);
@@ -71,21 +54,49 @@ public class LLMClient extends JFrame {
         modelComboBox.setFont(new Font("Arial", Font.PLAIN, 13));
         modelComboBox.addItem("Loading models...");
         
+        JPanel modelButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        
         refreshButton = new JButton("↻");
         refreshButton.setFont(new Font("Arial", Font.BOLD, 16));
         refreshButton.setPreferredSize(new Dimension(45, 25));
         refreshButton.setToolTipText("Refresh model list");
         refreshButton.addActionListener(e -> loadModels());
         
+        newChatButton = new JButton("New Chat");
+        newChatButton.setFont(new Font("Arial", Font.PLAIN, 11));
+        newChatButton.setToolTipText("Start a new conversation");
+        newChatButton.addActionListener(e -> startNewChat());
+        
+        modelButtonPanel.add(refreshButton);
+        modelButtonPanel.add(newChatButton);
+        
         modelControlPanel.add(modelComboBox, BorderLayout.CENTER);
-        modelControlPanel.add(refreshButton, BorderLayout.EAST);
+        modelControlPanel.add(modelButtonPanel, BorderLayout.EAST);
         
         modelPanel.add(modelLabel, BorderLayout.NORTH);
         modelPanel.add(modelControlPanel, BorderLayout.CENTER);
 
+        // Conversation area
+        JLabel conversationLabel = new JLabel("Conversation:");
+        conversationLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        
+        conversationArea = new JTextArea();
+        conversationArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        conversationArea.setLineWrap(true);
+        conversationArea.setWrapStyleWord(true);
+        conversationArea.setEditable(false);
+        conversationArea.setText("Start a conversation by typing a message below...\n");
+        
+        JScrollPane scrollPane = new JScrollPane(conversationArea);
+        scrollPane.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+
+        JPanel conversationPanel = new JPanel(new BorderLayout(5, 5));
+        conversationPanel.add(conversationLabel, BorderLayout.NORTH);
+        conversationPanel.add(scrollPane, BorderLayout.CENTER);
+
         // Query panel
         JPanel queryPanel = new JPanel(new BorderLayout(5, 5));
-        JLabel queryLabel = new JLabel("Query:");
+        JLabel queryLabel = new JLabel("Your Message:");
         queryLabel.setFont(new Font("Arial", Font.BOLD, 12));
         
         queryField = new JTextField();
@@ -105,28 +116,14 @@ public class LLMClient extends JFrame {
         buttonPanel.add(clearButton);
         buttonPanel.add(sendButton);
 
-        // Combine top elements
+        // Combine bottom elements
+        JPanel bottomPanel = new JPanel(new BorderLayout(5, 5));
+        bottomPanel.add(queryPanel, BorderLayout.CENTER);
+        bottomPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+        // Top panel combining model selector
         JPanel topPanel = new JPanel(new BorderLayout(5, 10));
         topPanel.add(modelPanel, BorderLayout.NORTH);
-        topPanel.add(queryPanel, BorderLayout.CENTER);
-        topPanel.add(buttonPanel, BorderLayout.SOUTH);
-
-        // Response area
-        JLabel responseLabel = new JLabel("Response:");
-        responseLabel.setFont(new Font("Arial", Font.BOLD, 12));
-        
-        responseArea = new JTextArea();
-        responseArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
-        responseArea.setLineWrap(true);
-        responseArea.setWrapStyleWord(true);
-        responseArea.setEditable(false);
-        
-        JScrollPane scrollPane = new JScrollPane(responseArea);
-        scrollPane.setBorder(BorderFactory.createLineBorder(Color.GRAY));
-
-        JPanel centerPanel = new JPanel(new BorderLayout(5, 5));
-        centerPanel.add(responseLabel, BorderLayout.NORTH);
-        centerPanel.add(scrollPane, BorderLayout.CENTER);
 
         // Status bar at bottom
         statusLabel = new JLabel("Ready");
@@ -138,10 +135,11 @@ public class LLMClient extends JFrame {
 
         // Add panels to main panel
         mainPanel.add(topPanel, BorderLayout.NORTH);
-        mainPanel.add(centerPanel, BorderLayout.CENTER);
-        mainPanel.add(statusLabel, BorderLayout.SOUTH);
+        mainPanel.add(conversationPanel, BorderLayout.CENTER);
+        mainPanel.add(bottomPanel, BorderLayout.SOUTH);
 
         add(mainPanel);
+        add(statusLabel, BorderLayout.SOUTH);
 
         // Event listeners
         sendButton.addActionListener(e -> sendQuery());
@@ -226,6 +224,20 @@ public class LLMClient extends JFrame {
         return models;
     }
 
+    private void startNewChat() {
+        int confirm = JOptionPane.showConfirmDialog(this,
+            "Start a new conversation? Current chat will be cleared.",
+            "New Chat",
+            JOptionPane.YES_NO_OPTION);
+        
+        if (confirm == JOptionPane.YES_OPTION) {
+            conversationHistory.clear();
+            conversationArea.setText("New conversation started...\n");
+            queryField.setText("");
+            statusLabel.setText("Ready - New conversation");
+        }
+    }
+
     private void sendQuery() {
         String query = queryField.getText().trim();
         String selectedModel = (String) modelComboBox.getSelectedItem();
@@ -243,36 +255,72 @@ public class LLMClient extends JFrame {
             return;
         }
 
+        // Add user message to history
+        try {
+            JSONObject userMessage = new JSONObject();
+            userMessage.put("role", "user");
+            userMessage.put("content", query);
+            conversationHistory.add(userMessage);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        // Display user message
+        conversationArea.append("\nYou: " + query + "\n");
+        queryField.setText("");
+
         sendButton.setEnabled(false);
         modelComboBox.setEnabled(false);
         refreshButton.setEnabled(false);
-        responseArea.setText("Generating response from " + selectedModel + "...\n");
-        statusLabel.setText("Generating...");
+        newChatButton.setEnabled(false);
+        conversationArea.append("\n" + selectedModel + ": Thinking...\n");
+        statusLabel.setText("Generating response...");
 
         new Thread(() -> {
             try {
-                String response = callOllamaAPI(query, selectedModel);
+                String response = callOllamaChat(selectedModel);
+                
+                // Add assistant response to history
+                try {
+                    JSONObject assistantMessage = new JSONObject();
+                    assistantMessage.put("role", "assistant");
+                    assistantMessage.put("content", response);
+                    conversationHistory.add(assistantMessage);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                
                 SwingUtilities.invokeLater(() -> {
-                    responseArea.setText(response);
-                    statusLabel.setText("Response complete");
+                    // Remove "Thinking..." line
+                    String currentText = conversationArea.getText();
+                    int lastThinking = currentText.lastIndexOf("Thinking...\n");
+                    if (lastThinking != -1) {
+                        conversationArea.setText(currentText.substring(0, lastThinking));
+                    }
+                    
+                    conversationArea.append(response + "\n");
+                    conversationArea.setCaretPosition(conversationArea.getDocument().getLength());
+                    statusLabel.setText("Response complete (" + conversationHistory.size() + " messages in history)");
                     sendButton.setEnabled(true);
                     modelComboBox.setEnabled(true);
                     refreshButton.setEnabled(true);
+                    newChatButton.setEnabled(true);
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
-                    responseArea.setText("Error: " + ex.getMessage());
+                    conversationArea.append("Error: " + ex.getMessage() + "\n");
                     statusLabel.setText("Error occurred");
                     sendButton.setEnabled(true);
                     modelComboBox.setEnabled(true);
                     refreshButton.setEnabled(true);
+                    newChatButton.setEnabled(true);
                 });
             }
         }).start();
     }
 
-    private String callOllamaAPI(String prompt, String model) throws Exception {
-        URL url = new URL(OLLAMA_GENERATE_URL);
+    private String callOllamaChat(String model) throws Exception {
+        URL url = new URL(OLLAMA_CHAT_URL);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
@@ -282,8 +330,14 @@ public class LLMClient extends JFrame {
 
         JSONObject json = new JSONObject();
         json.put("model", model);
-        json.put("prompt", prompt);
         json.put("stream", false);
+        
+        // Add conversation history
+        JSONArray messages = new JSONArray();
+        for (JSONObject msg : conversationHistory) {
+            messages.put(msg);
+        }
+        json.put("messages", messages);
 
         try (OutputStream os = conn.getOutputStream()) {
             os.write(json.toString().getBytes("UTF-8"));
@@ -304,13 +358,22 @@ public class LLMClient extends JFrame {
         }
 
         JSONObject responseJson = new JSONObject(response.toString());
-        return responseJson.getString("response");
+        JSONObject message = responseJson.getJSONObject("message");
+        return message.getString("content");
     }
 
     private void clearAll() {
-        queryField.setText("");
-        responseArea.setText("");
-        statusLabel.setText("Ready");
+        int confirm = JOptionPane.showConfirmDialog(this,
+            "Clear the entire conversation?",
+            "Clear Conversation",
+            JOptionPane.YES_NO_OPTION);
+        
+        if (confirm == JOptionPane.YES_OPTION) {
+            conversationHistory.clear();
+            queryField.setText("");
+            conversationArea.setText("Conversation cleared. Start a new one...\n");
+            statusLabel.setText("Ready");
+        }
     }
 
     public static void main(String[] args) {
